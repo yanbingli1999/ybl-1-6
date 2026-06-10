@@ -7,13 +7,22 @@ import {
   type DiagnosisResult,
   type ActionType,
   type AccidentType,
+  type StepError,
+  type TreatmentStep,
   initialEquipment,
   generatePetCase,
   generateInitialCases,
   generateTestCases,
   getDisease,
   getMedicine,
+  getActionLabel,
+  getCorrectTreatmentSteps,
 } from '@/data/gameData'
+
+interface PlayerStep {
+  action: ActionType
+  medicineId: string | null
+}
 
 interface GameState {
   cases: PetCase[]
@@ -24,19 +33,18 @@ interface GameState {
   accidentType: AccidentType | null
   diagnosisResult: DiagnosisResult | null
   actionCooldowns: Record<ActionType, number>
-  selectedMedicineId: string | null
-  showMedicineSelector: boolean
-  pendingAction: 'medicate' | 'inject' | 'feed' | null
+  playerSteps: PlayerStep[]
+  showStepEditor: number | null
 
   selectCase: (id: string) => void
   examine: () => void
-  medicate: () => void
-  inject: () => void
-  feed: () => void
-  isolate: () => void
-  selectMedicine: (id: string) => void
-  cancelMedicineSelect: () => void
-  performTreatment: (action: ActionType, medicineId?: string | null) => void
+  addStep: (action: ActionType) => void
+  removeStep: (index: number) => void
+  moveStep: (fromIndex: number, toIndex: number) => void
+  openStepMedicine: (index: number) => void
+  setStepMedicine: (index: number, medicineId: string | null) => void
+  closeStepEditor: () => void
+  submitTreatment: () => void
   repairEquipment: (id: string) => void
   dismissResult: () => void
   dismissAccident: () => void
@@ -72,16 +80,6 @@ function getPenaltyForAccident(urgency: PetCase['urgency']): number {
   }
 }
 
-function getActionLabel(action: ActionType): string {
-  switch (action) {
-    case 'examine': return '检查'
-    case 'medicate': return '用药'
-    case 'inject': return '打针'
-    case 'feed': return '喂食'
-    case 'isolate': return '隔离'
-  }
-}
-
 export const useGameStore = create<GameState>((set, get) => ({
   cases: generateInitialCases(5),
   activeCaseId: null,
@@ -97,9 +95,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     feed: 0,
     isolate: 0,
   },
-  selectedMedicineId: null,
-  showMedicineSelector: false,
-  pendingAction: null,
+  playerSteps: [],
+  showStepEditor: null,
 
   selectCase: (id: string) => {
     const state = get()
@@ -107,9 +104,8 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({
       activeCaseId: id,
       gamePhase: 'diagnosing',
-      showMedicineSelector: false,
-      selectedMedicineId: null,
-      pendingAction: null,
+      playerSteps: [],
+      showStepEditor: null,
     })
   },
 
@@ -129,96 +125,159 @@ export const useGameStore = create<GameState>((set, get) => ({
     set({
       cases: updatedCases,
       actionCooldowns: { ...state.actionCooldowns, examine: Date.now() + 3000 },
+      gamePhase: 'sorting',
     })
   },
 
-  medicate: () => {
-    set({ showMedicineSelector: true, pendingAction: 'medicate' })
-  },
-
-  inject: () => {
-    set({ showMedicineSelector: true, pendingAction: 'inject' })
-  },
-
-  feed: () => {
-    set({ showMedicineSelector: true, pendingAction: 'feed' })
-  },
-
-  isolate: () => {
-    get().performTreatment('isolate')
-  },
-
-  selectMedicine: (id: string) => {
+  addStep: (action: ActionType) => {
     const state = get()
-    const action = state.pendingAction
-    if (!action) return
+    const equip = state.equipment.find(e => e.requiredAction === action)
+    if (equip?.status !== 'normal') return
 
-    const medicine = getMedicine(id)
-    if (medicine && state.player.coins < medicine.cost) {
-      const activeCase = state.cases.find(c => c.id === state.activeCaseId)
-      if (!activeCase) return
-
-      const disease = getDisease(activeCase.diseaseId)
-      const itemType = action === 'feed' ? '食物' : '药品'
-      const result: DiagnosisResult = {
-        success: false,
-        diseaseName: disease?.name || '',
-        actionTaken: action,
-        correctAction: disease?.correctAction || 'medicate',
-        medicineUsed: id,
-        correctMedicine: disease?.medicineId || null,
-        coinsEarned: 0,
-        medicineCost: medicine.cost,
-        accidentType: null,
-        damagedEquipment: null,
-        message: `星币不足！${medicine.name} 需要 ${medicine.cost} ⬡，你只有 ${state.player.coins} ⬡`,
-        errorType: 'funds',
-      }
-
-      set({
-        gamePhase: 'result',
-        diagnosisResult: result,
-        showMedicineSelector: false,
-        selectedMedicineId: null,
-        pendingAction: null,
-      })
-      return
-    }
-
-    get().performTreatment(action, id)
+    set({
+      playerSteps: [...state.playerSteps, { action, medicineId: null }],
+    })
   },
 
-  cancelMedicineSelect: () => {
-    set({ showMedicineSelector: false, selectedMedicineId: null, pendingAction: null })
+  removeStep: (index: number) => {
+    const state = get()
+    const newSteps = state.playerSteps.filter((_, i) => i !== index)
+    set({ playerSteps: newSteps, showStepEditor: null })
   },
 
-  performTreatment: (action: ActionType, medicineId?: string | null) => {
+  moveStep: (fromIndex: number, toIndex: number) => {
+    const state = get()
+    const steps = [...state.playerSteps]
+    const [removed] = steps.splice(fromIndex, 1)
+    steps.splice(toIndex, 0, removed)
+    set({ playerSteps: steps })
+  },
+
+  openStepMedicine: (index: number) => {
+    set({ showStepEditor: index })
+  },
+
+  setStepMedicine: (index: number, medicineId: string | null) => {
+    const state = get()
+    const newSteps = state.playerSteps.map((step, i) =>
+      i === index ? { ...step, medicineId } : step
+    )
+    set({ playerSteps: newSteps, showStepEditor: null })
+  },
+
+  closeStepEditor: () => {
+    set({ showStepEditor: null })
+  },
+
+  submitTreatment: () => {
     const state = get()
     const activeCase = state.cases.find(c => c.id === state.activeCaseId)
     if (!activeCase) return
 
-    const disease = getDisease(activeCase.diseaseId)
-    if (!disease) return
+    const primaryDisease = getDisease(activeCase.primaryDiseaseId)
+    const complication = activeCase.complicationId ? getDisease(activeCase.complicationId) : null
+    if (!primaryDisease) return
 
-    const requiredEquip = state.equipment.find(e => e.requiredAction === action)
-    if (requiredEquip?.status !== 'normal') return
+    const correctSteps = getCorrectTreatmentSteps(activeCase.primaryDiseaseId, activeCase.complicationId)
+    const playerSteps = state.playerSteps
 
-    const actionCorrect = action === disease.correctAction
-    const needsMedicine = disease.medicineId !== null
-    const medicine = medicineId ? getMedicine(medicineId) : null
-    const medicineCorrect = !needsMedicine || (medicineId !== undefined && medicineId === disease.medicineId)
-    const medicineCost = medicine?.cost || 0
+    const stepErrors: StepError[] = []
+    let totalMedicineCost = 0
+    let firstErrorAccident: AccidentType | null = null
+    let firstErrorDamagedEquip: string | null = null
 
-    let errorType: 'action' | 'medicine' | null = null
-    if (!actionCorrect) errorType = 'action'
-    else if (actionCorrect && !medicineCorrect) errorType = 'medicine'
+    const maxLen = Math.max(correctSteps.length, playerSteps.length)
 
-    const isCorrect = actionCorrect && medicineCorrect
+    for (let i = 0; i < maxLen; i++) {
+      const correctStep = correctSteps[i]
+      const playerStep = playerSteps[i]
+
+      if (!playerStep) {
+        stepErrors.push({
+          stepIndex: i,
+          playerAction: ('' as ActionType),
+          correctAction: correctStep.action,
+          playerMedicine: null,
+          correctMedicine: correctStep.medicineId,
+          errorType: 'action',
+        })
+        if (!firstErrorAccident) {
+          firstErrorAccident = primaryDisease.accidentType
+        }
+        continue
+      }
+
+      if (!correctStep) {
+        stepErrors.push({
+          stepIndex: i,
+          playerAction: playerStep.action,
+          correctAction: ('' as ActionType),
+          playerMedicine: playerStep.medicineId,
+          correctMedicine: null,
+          errorType: 'action',
+        })
+        if (!firstErrorAccident) {
+          firstErrorAccident = primaryDisease.accidentType
+        }
+        if (playerStep.medicineId) {
+          const med = getMedicine(playerStep.medicineId)
+          if (med) totalMedicineCost += med.cost
+        }
+        continue
+      }
+
+      if (playerStep.action !== correctStep.action) {
+        stepErrors.push({
+          stepIndex: i,
+          playerAction: playerStep.action,
+          correctAction: correctStep.action,
+          playerMedicine: playerStep.medicineId,
+          correctMedicine: correctStep.medicineId,
+          errorType: 'action',
+        })
+        if (!firstErrorAccident) {
+          firstErrorAccident = primaryDisease.accidentType
+          if (primaryDisease.accidentType === 'bite') {
+            const equip = state.equipment.find(e => e.requiredAction === playerStep.action)
+            firstErrorDamagedEquip = equip?.id || null
+          }
+        }
+      } else if (playerStep.medicineId !== correctStep.medicineId) {
+        stepErrors.push({
+          stepIndex: i,
+          playerAction: playerStep.action,
+          correctAction: correctStep.action,
+          playerMedicine: playerStep.medicineId,
+          correctMedicine: correctStep.medicineId,
+          errorType: 'medicine',
+        })
+        if (!firstErrorAccident) {
+          firstErrorAccident = primaryDisease.accidentType
+        }
+      }
+
+      if (playerStep.medicineId) {
+        const med = getMedicine(playerStep.medicineId)
+        if (med) totalMedicineCost += med.cost
+      }
+    }
+
+    const isCorrect = stepErrors.length === 0
 
     if (isCorrect) {
-      const coinsEarned = getCoinsForUrgency(activeCase.urgency)
-      const expGain = activeCase.urgency === 'high' ? 30 : activeCase.urgency === 'medium' ? 20 : 10
-      const netCoins = coinsEarned - medicineCost
+      const correctMedicineCost = correctSteps.reduce((sum, step) => {
+        if (step.medicineId) {
+          const med = getMedicine(step.medicineId)
+          return sum + (med?.cost || 0)
+        }
+        return sum
+      }, 0)
+
+      const baseCoins = getCoinsForUrgency(activeCase.urgency)
+      const complicationBonus = activeCase.complicationId ? 30 : 0
+      const coinsEarned = baseCoins + complicationBonus
+      const expGain = (activeCase.urgency === 'high' ? 30 : activeCase.urgency === 'medium' ? 20 : 10) + (activeCase.complicationId ? 15 : 0)
+      const netCoins = coinsEarned - correctMedicineCost
       const newExp = state.player.exp + expGain
       const levelUp = newExp >= expPerLevel
       const newLevel = levelUp ? state.player.level + 1 : state.player.level
@@ -228,25 +287,24 @@ export const useGameStore = create<GameState>((set, get) => ({
         c.id === activeCase.id ? { ...c, status: 'cured' as const } : c
       )
 
-      const itemType = action === 'feed' ? '食物' : action === 'inject' ? '注射剂' : '药品'
-      let message = `诊断正确！${activeCase.petName} 的「${disease.name}」已治愈！`
-      if (medicineCost > 0) {
-        message += `（扣除${itemType}费 ${medicineCost} ⬡）`
+      let message = `治疗成功！${activeCase.petName} 的「${primaryDisease.name}」已治愈！`
+      if (activeCase.complicationId && complication) {
+        message += `并发症「${complication.name}」也已控制！`
+      }
+      if (correctMedicineCost > 0) {
+        message += `（扣除药品费 ${correctMedicineCost} ⬡）`
       }
 
       const result: DiagnosisResult = {
         success: true,
-        diseaseName: disease.name,
-        actionTaken: action,
-        correctAction: disease.correctAction,
-        medicineUsed: medicineId || null,
-        correctMedicine: disease.medicineId,
+        primaryDiseaseName: primaryDisease.name,
+        complicationName: complication?.name || null,
         coinsEarned: netCoins,
-        medicineCost,
+        medicineCost: correctMedicineCost,
         accidentType: null,
         damagedEquipment: null,
         message,
-        errorType: null,
+        stepErrors: [],
       }
 
       set({
@@ -261,53 +319,52 @@ export const useGameStore = create<GameState>((set, get) => ({
         },
         gamePhase: 'result',
         diagnosisResult: result,
-        showMedicineSelector: false,
-        selectedMedicineId: null,
-        pendingAction: null,
       })
     } else {
       const penalty = getPenaltyForAccident(activeCase.urgency)
-      const totalDeduction = penalty + medicineCost
-      const damagedEquipId = disease.accidentType === 'bite'
-        ? requiredEquip?.id || null
-        : null
+      const totalDeduction = penalty + totalMedicineCost
 
       const updatedCases = state.cases.map(c =>
         c.id === activeCase.id ? { ...c, status: 'accident' as const } : c
       )
 
-      const updatedEquipment = damagedEquipId
+      const updatedEquipment = firstErrorDamagedEquip
         ? state.equipment.map(e =>
-            e.id === damagedEquipId ? { ...e, status: 'damaged' as const } : e
+            e.id === firstErrorDamagedEquip ? { ...e, status: 'damaged' as const } : e
           )
         : state.equipment
 
+      const firstError = stepErrors[0]
       let message = ''
-      const itemType = action === 'feed' ? '食物' : action === 'inject' ? '注射剂' : '药品'
-      if (errorType === 'action') {
-        message = `误诊！${activeCase.petName} 患的是「${disease.name}」，应该${getActionLabel(disease.correctAction)}而不是${getActionLabel(action)}！`
-        if (medicineCost > 0) {
-          message += `（扣除${itemType}费 ${medicineCost} ⬡）`
+      if (firstError) {
+        if (firstError.errorType === 'action') {
+          if (firstError.correctAction && firstError.playerAction) {
+            message = `第${firstError.stepIndex + 1}步操作错误！应该${getActionLabel(firstError.correctAction)}而不是${getActionLabel(firstError.playerAction)}！`
+          } else if (!firstError.playerAction) {
+            message = `缺少第${firstError.stepIndex + 1}步：应该执行${getActionLabel(firstError.correctAction)}！`
+          } else {
+            message = `第${firstError.stepIndex + 1}步多余：不应该执行${getActionLabel(firstError.playerAction)}！`
+          }
+        } else {
+          const correctMed = firstError.correctMedicine ? getMedicine(firstError.correctMedicine)?.name : '无需药品'
+          const playerMed = firstError.playerMedicine ? getMedicine(firstError.playerMedicine)?.name : '未选药品'
+          message = `第${firstError.stepIndex + 1}步药品错误！应该用「${correctMed}」而不是「${playerMed}」！`
         }
-      } else if (errorType === 'medicine') {
-        const correctMed = disease.medicineId ? getMedicine(disease.medicineId) : null
-        const usedMed = medicineId ? getMedicine(medicineId) : null
-        message = `用错${itemType}了！${activeCase.petName} 患的是「${disease.name}」，应该用「${correctMed?.name || '正确物品'}」而不是「${usedMed?.name || '未知物品'}」！（扣除${itemType}费 ${medicineCost} ⬡）`
+      }
+      if (totalMedicineCost > 0) {
+        message += `（消耗药品费 ${totalMedicineCost} ⬡）`
       }
 
       const result: DiagnosisResult = {
         success: false,
-        diseaseName: disease.name,
-        actionTaken: action,
-        correctAction: disease.correctAction,
-        medicineUsed: medicineId || null,
-        correctMedicine: disease.medicineId,
+        primaryDiseaseName: primaryDisease.name,
+        complicationName: complication?.name || null,
         coinsEarned: -totalDeduction,
-        medicineCost,
-        accidentType: disease.accidentType,
-        damagedEquipment: damagedEquipId,
+        medicineCost: totalMedicineCost,
+        accidentType: firstErrorAccident,
+        damagedEquipment: firstErrorDamagedEquip,
         message,
-        errorType,
+        stepErrors,
       }
 
       set({
@@ -319,11 +376,8 @@ export const useGameStore = create<GameState>((set, get) => ({
           misdiagnosed: state.player.misdiagnosed + 1,
         },
         gamePhase: 'accident',
-        accidentType: disease.accidentType,
+        accidentType: firstErrorAccident,
         diagnosisResult: result,
-        showMedicineSelector: false,
-        selectedMedicineId: null,
-        pendingAction: null,
       })
     }
   },
@@ -357,6 +411,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       gamePhase: 'idle',
       diagnosisResult: null,
       cases: remainingCases,
+      playerSteps: [],
+      showStepEditor: null,
     })
   },
 
@@ -373,6 +429,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       accidentType: null,
       diagnosisResult: null,
       cases: remainingCases,
+      playerSteps: [],
+      showStepEditor: null,
     })
   },
 
@@ -389,9 +447,8 @@ export const useGameStore = create<GameState>((set, get) => ({
       gamePhase: 'idle',
       accidentType: null,
       diagnosisResult: null,
-      showMedicineSelector: false,
-      selectedMedicineId: null,
-      pendingAction: null,
+      playerSteps: [],
+      showStepEditor: null,
     })
   },
 
@@ -411,9 +468,8 @@ export const useGameStore = create<GameState>((set, get) => ({
         feed: 0,
         isolate: 0,
       },
-      showMedicineSelector: false,
-      selectedMedicineId: null,
-      pendingAction: null,
+      playerSteps: [],
+      showStepEditor: null,
     })
   },
 }))

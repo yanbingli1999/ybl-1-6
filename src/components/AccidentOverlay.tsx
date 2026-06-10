@@ -1,5 +1,5 @@
 import { useGameStore } from '@/store/useGameStore'
-import { getMedicine, type AccidentType } from '@/data/gameData'
+import { getMedicine, getActionLabel, type AccidentType } from '@/data/gameData'
 
 export default function AccidentOverlay() {
   const accidentType = useGameStore(s => s.accidentType)
@@ -8,6 +8,8 @@ export default function AccidentOverlay() {
   const gamePhase = useGameStore(s => s.gamePhase)
 
   if (gamePhase !== 'accident' || !accidentType) return null
+
+  const firstError = diagnosisResult?.stepErrors[0]
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center" onClick={() => dismissAccident()}>
@@ -21,14 +23,24 @@ export default function AccidentOverlay() {
           <p className="text-sm text-gray-300 mb-1">
             {diagnosisResult?.message}
           </p>
+          {firstError && (
+            <div className="text-xs text-gray-400 mt-1 space-y-0.5">
+              <p>第{firstError.stepIndex + 1}步出错</p>
+              {firstError.errorType === 'medicine' && firstError.correctMedicine && (
+                <p className="text-purple-400">
+                  💊 正确药品：{(() => { const m = getMedicine(firstError.correctMedicine!); return m?.name; })()}
+                </p>
+              )}
+              {firstError.errorType === 'action' && firstError.correctAction && (
+                <p className="text-orange-400">
+                  🔧 正确操作：{getActionLabel(firstError.correctAction)}
+                </p>
+              )}
+            </div>
+          )}
           {diagnosisResult?.damagedEquipment && (
             <p className="text-xs text-orange-400 mt-2">
               🔧 设备已损坏，请尽快维修！
-            </p>
-          )}
-          {diagnosisResult?.errorType === 'medicine' && diagnosisResult.correctMedicine && (
-            <p className="text-xs text-purple-400 mt-1">
-              💊 正确药品：{(() => { const m = getMedicine(diagnosisResult.correctMedicine!); return m?.name; })()}
             </p>
           )}
           <p className="text-xs text-red-400 mt-2">

@@ -1,6 +1,6 @@
 import { useGameStore } from '@/store/useGameStore'
 import { getBreed, getSymptomsForDisease, getDisease, getSymptom } from '@/data/gameData'
-import { AlertTriangle, Clock, ChevronRight } from 'lucide-react'
+import { AlertTriangle, Clock, ChevronRight, AlertCircle } from 'lucide-react'
 
 export default function CaseQueue() {
   const cases = useGameStore(s => s.cases)
@@ -21,9 +21,10 @@ export default function CaseQueue() {
       <div className="flex-1 overflow-y-auto p-3 space-y-2 scrollbar-thin">
         {waitingCases.map(c => {
           const breed = getBreed(c.breedId)
-          const disease = getDisease(c.diseaseId)
+          const disease = getDisease(c.primaryDiseaseId)
+          const complication = c.complicationId ? getDisease(c.complicationId) : null
           const isActive = c.id === activeCaseId
-          const symptomPreview = getSymptomsForDisease(c.diseaseId)
+          const symptomPreview = getSymptomsForDisease(c.primaryDiseaseId)
             .slice(0, 1)
             .map(sid => getSymptom(sid))[0]
 
@@ -48,7 +49,7 @@ export default function CaseQueue() {
               <div className="flex items-center gap-3 pl-2">
                 <span className="text-2xl">{breed?.emoji}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-semibold text-gray-200 truncate">
                       {c.petName}
                     </span>
@@ -56,14 +57,22 @@ export default function CaseQueue() {
                     {c.urgency === 'high' && (
                       <AlertTriangle className="w-3 h-3 text-red-400 animate-pulse" />
                     )}
+                    {c.complicationId && (
+                      <span className="inline-flex items-center gap-0.5 text-[9px] text-purple-400 bg-purple-900/30 px-1.5 py-0.5 rounded">
+                        <AlertCircle className="w-2.5 h-2.5" />并发症
+                      </span>
+                    )}
                   </div>
                   <div className="text-xs text-gray-500 mt-0.5 truncate">
                     {c.examined ? disease?.description : (symptomPreview?.description || '未检查')}
+                    {complication && c.examined && (
+                      <span className="text-purple-500"> + {complication.name}</span>
+                    )}
                   </div>
                 </div>
                 <ChevronRight className="w-4 h-4 text-gray-600 group-hover:text-cyan-400 transition-colors" />
               </div>
-              <div className="flex items-center gap-2 mt-1.5 pl-2">
+              <div className="flex items-center gap-2 mt-1.5 pl-2 flex-wrap">
                 {c.urgency === 'high' && (
                   <span className="inline-flex items-center gap-0.5 text-[10px] text-red-400 bg-red-900/30 px-1.5 py-0.5 rounded">
                     <AlertTriangle className="w-2.5 h-2.5" />紧急
@@ -72,6 +81,11 @@ export default function CaseQueue() {
                 {c.urgency === 'medium' && (
                   <span className="inline-flex items-center gap-0.5 text-[10px] text-yellow-400 bg-yellow-900/30 px-1.5 py-0.5 rounded">
                     <Clock className="w-2.5 h-2.5" />一般
+                  </span>
+                )}
+                {c.urgency === 'low' && (
+                  <span className="inline-flex items-center gap-0.5 text-[10px] text-green-400 bg-green-900/30 px-1.5 py-0.5 rounded">
+                    轻微
                   </span>
                 )}
                 {c.examined && (
